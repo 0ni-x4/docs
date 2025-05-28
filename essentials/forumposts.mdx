@@ -1,0 +1,497 @@
+---
+title: How to Create Forum Posts with Whop API
+description: "Complete guide to implementing automatic forum posts in your Whop application using the correct API methods and field names."
+---
+
+# How to Create Forum Posts with Whop API
+
+## Overview
+
+This guide explains how to properly implement automatic forum posting in your Whop application. We'll cover the correct API methods, field names, and common pitfalls to avoid.
+
+## Prerequisites
+
+- Whop SDK installed (`@whop/api`)
+- Valid Whop App ID and API Key
+- User authentication token
+- Company/Business ID
+
+## Understanding Whop Forum Structure
+
+Whop forums work with two main concepts:
+
+1. **Forum Experience**: A forum is actually an "Experience" in Whop's system
+2. **Forum Posts**: Individual posts within a forum experience
+
+## Step 1: Setting Up the Whop API Client
+
+```typescript
+import { WhopServerSdk } from "@whop/api";
+
+export const whopApi = WhopServerSdk({
+  appApiKey: process.env.WHOP_API_KEY ?? "fallback",
+  onBehalfOfUserId: process.env.MY_USER_ID,
+  companyId: "biz_your_company_id", // Optional default
+});
+```
+
+## Step 2: Create or Find a Forum Experience
+
+### Method 1: Create a New Forum Experience
+
+```typescript
+async function createForum(userId: string, bizId: string, experienceId: string) {
+  try {
+    const forumResult = await whopApi
+      .withUser(userId)
+      .withCompany(bizId)
+      .CreateForum({
+        input: {
+          experienceId: experienceId, // Parent experience ID
+          name: "Places Forum",
+          whoCanPost: "everyone", // or "admins"
+        },
+      });
+    
+    return forumResult.createForum?.id;
+  } catch (error) {
+    console.error("Error creating forum:", error);
+    return null;
+  }
+}
+```
+
+### Method 2: Use Existing Forum Experience ID
+
+If you already have a forum experience, you can use its ID directly:
+
+```typescript
+const forumExperienceId = "exp_your_forum_experience_id";
+```
+
+## Step 3: Create Forum Posts
+
+### ⚠️ Important: Use the Correct Field Names
+
+The most common mistake is using the wrong field name. The correct field is `forumExperienceId`, NOT `forumId`.
+
+```typescript
+// ❌ WRONG - This will fail
+const postResult = await whopApi.CreateForumPost({
+  input: {
+    forumId: "exp_123", // This field doesn't exist!
+    title: "My Post",
+    content: "Hello world"
+  }
+});
+
+// ✅ CORRECT - This works
+const postResult = await whopApi
+  .withUser(userId)
+  .withCompany(bizId)
+  .CreateForumPost({
+    input: {
+      forumExperienceId: "exp_123", // Correct field name
+      title: "My Post",
+      content: "Hello world"
+    }
+  });
+```
+
+### Complete Forum Post Example
+
+```typescript
+async function createForumPost({
+  forumExperienceId,
+  userId,
+  bizId,
+  title,
+  content,
+  notifyMembers = false
+}: {
+  forumExperienceId: string;
+  userId: string;
+  bizId: string;
+  title: string;
+  content: string;
+  notifyMembers?: boolean;
+}) {
+  try {
+    const postResult = await whopApi
+      .withUser(userId)
+      .withCompany(bizId)
+      .CreateForumPost({
+        input: {
+          forumExperienceId: forumExperienceId,
+          title: title,
+          content: content,
+          isMention: notifyMembers, // Notifies all members if true
+        },
+      });
+
+    if (postResult.createForumPost) {
+      console.log(`✅ Forum post created: ${postResult.createForumPost.id}`);
+      return postResult.createForumPost;
+    } else {
+      console.error("❌ Failed to create forum post");
+      return null;
+    }
+  } catch (error) {
+    console.error("Error creating forum post:", error);
+    return null;
+  }
+}
+```
+
+## Step 4: Advanced Forum Post Features
+
+### Adding Rich Content
+
+```typescript
+const richContent = `
+# Welcome to Our Community! 🎉
+
+**Important announcement:**
+- New features are coming soon
+- Check out our latest updates
+- Join the discussion below
+
+![Image](https://example.com/image.jpg)
+
+[Visit our website](https://example.com)
+`;
+
+await whopApi
+  .withUser(userId)
+  .withCompany(bizId)
+  .CreateForumPost({
+    input: {
+      forumExperienceId: forumId,
+      title: "📣 Community Update",
+      content: richContent,
+      isMention: true,
+    },
+  });
+```
+
+### Adding Attachments (Coming Soon)
+
+```typescript
+// This feature requires file upload implementation
+const postWithAttachments = await whopApi
+  .withUser(userId)
+  .withCompany(bizId)
+  .CreateForumPost({
+    input: {
+      forumExperienceId: forumId,
+      title: "Post with Image",
+      content: "Check out this awesome content!",
+      attachments: [
+        {
+          directUploadId: "upload_id_here", // From file upload API
+        },
+      ],
+    },
+  });
+```
+
+## Step 5: Real-World Implementation
+
+Here's a complete example of how to integrate forum posting into a place management system:
+
+```typescript
+import { whopApi } from "./whop-api";
+
+export async function createPlaceAnnouncementPost({
+  place,
+  experienceId,
+  userId,
+  bizId,
+}: {
+  place: {
+    id: string;
+    name: string;
+    address?: string | null;
+    description?: string | null;
+    latitude: number;
+    longitude: number;
+    category?: string | null;
+  };
+  experienceId: string;
+  userId: string;
+  bizId: string;
+}) {
+  try {
+    // Step 1: Create or find the forum
+    let forumId: string | null = null;
+    try {
+      const forumResult = await whopApi
+        .withUser(userId)
+        .withCompany(bizId)
+        .CreateForum({
+          input: {
+            experienceId: experienceId,
+            name: "Places Forum",
+            whoCanPost: "everyone",
+          },
+        });
+      
+      forumId = forumResult.createForum?.id || null;
+    } catch (error) {
+      // Forum might already exist, use experienceId as fallback
+      console.log("Forum might already exist, continuing...");
+      forumId = experienceId;
+    }
+
+    if (!forumId) {
+      throw new Error("Could not create or find forum");
+    }
+
+    // Step 2: Build the post content
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://your-app.com";
+    const mapUrl = `${appUrl}/experiences/${experienceId}`;
+    
+    const addressText = place.address 
+      ? `**Address:** ${place.address}`
+      : `**Coordinates:** ${place.latitude.toFixed(4)}, ${place.longitude.toFixed(4)}`;
+
+    const categoryText = place.category ? `**Category:** ${place.category}` : '';
+    const descriptionText = place.description ? `**Description:** ${place.description}` : '';
+
+    const postContent = `A new place has been added to the map! 🗺️
+
+${addressText}
+${categoryText}
+${descriptionText}
+
+🔗 **View on Map**: ${mapUrl}
+
+Click the link above to explore this location and all other places on our interactive map!`;
+
+    // Step 3: Create the forum post
+    const postResult = await whopApi
+      .withUser(userId)
+      .withCompany(bizId)
+      .CreateForumPost({
+        input: {
+          forumExperienceId: forumId, // ✅ Correct field name
+          title: `📍 New Place Added: ${place.name}`,
+          content: postContent,
+          isMention: true, // Notify all members
+        },
+      });
+
+    if (postResult.createForumPost) {
+      console.log(`✅ Successfully created forum post for place: ${place.name}`);
+      console.log(`📝 Post ID: ${postResult.createForumPost.id}`);
+      return postResult.createForumPost;
+    } else {
+      throw new Error("Failed to create forum post");
+    }
+
+  } catch (error) {
+    console.error("Error creating place announcement post:", error);
+    
+    // Fallback: Log notification details
+    console.log(`=== Forum Post Failed - Logging Details ===`);
+    console.log(`Title: 📍 New Place Added: ${place.name}`);
+    console.log(`Content: New place added to the map`);
+    
+    // Optional: Send webhook notification as backup
+    if (process.env.DEFAULT_WEBHOOK_URL) {
+      try {
+        await fetch(process.env.DEFAULT_WEBHOOK_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content: `📍 New place added: **${place.name}**`
+          })
+        });
+        console.log(`✅ Webhook notification sent as backup`);
+      } catch (webhookError) {
+        console.error("Backup webhook also failed:", webhookError);
+      }
+    }
+    
+    return null;
+  }
+}
+```
+
+## Common Pitfalls and Solutions
+
+### 1. Wrong Field Names
+
+**Problem:** Using `forumId` instead of `forumExperienceId`
+```typescript
+// ❌ This fails
+forumId: "exp_123"
+
+// ✅ This works  
+forumExperienceId: "exp_123"
+```
+
+### 2. Missing User Context
+
+**Problem:** Not using `.withUser()` and `.withCompany()`
+```typescript
+// ❌ This fails - no user context
+await whopApi.CreateForumPost({...});
+
+// ✅ This works - proper user context
+await whopApi
+  .withUser(userId)
+  .withCompany(bizId)
+  .CreateForumPost({...});
+```
+
+### 3. Invalid Forum Experience ID
+
+**Problem:** Using wrong experience ID or non-forum experience
+```typescript
+// Make sure the experience ID is for a forum experience
+// You can check this in the Whop dashboard
+```
+
+### 4. Permission Issues
+
+**Problem:** User doesn't have permission to post in the forum
+```typescript
+// Ensure the user has access to the experience
+// And the forum allows their access level to post
+```
+
+## Troubleshooting
+
+### Check API Response Errors
+
+```typescript
+try {
+  const result = await whopApi.CreateForumPost({...});
+} catch (error: any) {
+  console.error("Full error details:", {
+    message: error.message,
+    response: error.response,
+    request: error.request
+  });
+}
+```
+
+### Validate Input Data
+
+```typescript
+function validateForumPostInput(input: any) {
+  const required = ['forumExperienceId', 'title', 'content'];
+  const missing = required.filter(field => !input[field]);
+  
+  if (missing.length > 0) {
+    throw new Error(`Missing required fields: ${missing.join(', ')}`);
+  }
+  
+  return true;
+}
+```
+
+### Test with Simple Post First
+
+```typescript
+// Start with a minimal post to test your setup
+async function testForumPost() {
+  try {
+    const result = await whopApi
+      .withUser("user_your_user_id")
+      .withCompany("biz_your_biz_id")  
+      .CreateForumPost({
+        input: {
+          forumExperienceId: "exp_your_forum_id",
+          title: "Test Post",
+          content: "This is a test post to verify the API works."
+        }
+      });
+    
+    console.log("✅ Test post successful:", result);
+  } catch (error) {
+    console.error("❌ Test post failed:", error);
+  }
+}
+```
+
+## Environment Variables
+
+Make sure you have these environment variables set:
+
+```env
+# Required for Whop API
+WHOP_APP_ID=app_your_app_id
+WHOP_API_KEY=whop_your_api_key
+MY_USER_ID=user_your_user_id
+
+# Optional for enhanced functionality
+NEXT_PUBLIC_APP_URL=https://your-app.com
+DEFAULT_WEBHOOK_URL=https://your-webhook-endpoint.com
+```
+
+## Integration with API Routes
+
+Here's how to integrate forum posting into your Next.js API routes:
+
+```typescript
+// app/api/experiences/[experienceId]/places/route.ts
+import { createPlaceAnnouncementPost } from "@/lib/helpers";
+
+export async function POST(request: Request) {
+  try {
+    // ... create place logic ...
+    
+    const place = await createPlace({
+      experienceId,
+      name,
+      description,
+      latitude,
+      longitude,
+      address,
+      category,
+    });
+
+    // Create forum post after place is successfully created
+    try {
+      await createPlaceAnnouncementPost({
+        place,
+        experienceId,
+        userId: userToken.userId,
+        bizId: "your_biz_id", // Get this from your experience data
+      });
+    } catch (forumError) {
+      // Don't fail the place creation if forum post fails
+      console.error("Forum post failed, but place was created:", forumError);
+    }
+
+    return NextResponse.json(place);
+  } catch (error) {
+    console.error("Error creating place:", error);
+    return NextResponse.json(
+      { error: "Failed to create place" },
+      { status: 500 }
+    );
+  }
+}
+```
+
+## Summary
+
+Key points to remember:
+
+1. ✅ Use `forumExperienceId` not `forumId`
+2. ✅ Always use `.withUser()` and `.withCompany()`
+3. ✅ Handle errors gracefully with fallback notifications
+4. ✅ Test with simple posts first
+5. ✅ Validate your input data
+6. ✅ Set `isMention: true` to notify all members
+
+Following this guide will help you successfully implement automatic forum posting in your Whop application!
+
+## Need Help?
+
+- Check the [Whop Developer Documentation](https://developers.whop.com)
+- Join the [Developer Whop Community](https://whop.com/whop-devs)
+- View the [Whop SDK on GitHub](https://github.com/whopio/whop-sdk-ts) 
