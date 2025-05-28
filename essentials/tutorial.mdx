@@ -1014,25 +1014,884 @@ export async function DELETE(request: Request) {
 4. **Error Handling**: Comprehensive error responses with proper HTTP status codes
 5. **Input Validation**: Ensure required fields are present and correctly typed
 
-## 12. Continue with complete component implementation...
+## 12. Main MapView Component
 
-[Due to length constraints, I need to split this into multiple parts. Should I continue with the remaining components?]
+Create `components/MapView.tsx`:
 
-## Key Architectural Decisions
+```typescript components/MapView.tsx
+"use client";
 
-### Why This Structure?
+import { useRef, useState } from 'react';
+import mapboxgl from 'mapbox-gl';
+import type { MapViewProps, NewPlacePosition } from './map/types';
+import MapContainer from './map/MapContainer';
+import PlaceControlPanel from './map/PlaceControlPanel';
+import PlacesList from './map/PlacesList';
 
-1. **Security First**: Every request validates both user identity and experience access
-2. **Separation of Concerns**: Database logic, API logic, and UI logic are clearly separated
-3. **Type Safety**: Full TypeScript coverage prevents runtime errors
-4. **Scalability**: Modular component design allows easy feature additions
-5. **User Experience**: Role-based UI adapts to user permissions
+/**
+ * Creates a custom SVG pin marker for places on the map
+ * Why SVG? It scales perfectly at all zoom levels and allows custom colors
+ */
+const createPinMarker = (color = '#dc2626') => {
+  const markerEl = document.createElement('div');
+  markerEl.innerHTML = `
+    <svg width="24" height="30" viewBox="0 0 24 30" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 0C5.372 0 0 5.372 0 12C0 18.628 12 30 12 30S24 18.628 24 12C24 5.372 18.628 0 12 0Z" fill="${color}"/>
+      <circle cx="12" cy="12" r="4" fill="white"/>
+    </svg>
+  `;
+  markerEl.style.cursor = 'pointer';
+  markerEl.style.width = '24px';
+  markerEl.style.height = '30px';
+  markerEl.style.display = 'block';
+  markerEl.style.border = 'none';
+  markerEl.style.borderRadius = '0';
+  markerEl.style.padding = '0';
+  return markerEl;
+};
 
-### Whop Integration Benefits
+export default function MapView({
+  places,
+  accessLevel,
+  experienceId,
+}: MapViewProps) {
+  // State for managing place creation mode
+  const [isAddingPlace, setIsAddingPlace] = useState(false);
+  const [newPlacePosition, setNewPlacePosition] = useState<NewPlacePosition | null>(null);
+  
+  // Refs for managing map and marker instances
+  const newMarkerRef = useRef<mapboxgl.Marker | null>(null);
+  const mapRef = useRef<mapboxgl.Map | null>(null);
 
-1. **Authentication**: No need to build user management from scratch
-2. **Authorization**: Built-in access control for paid experiences
-3. **Payment Processing**: Whop handles all billing and subscriptions
-4. **User Management**: Automatic user roles and permissions
+  /**
+   * Updates the preview marker when user clicks to add a new place
+   * Green color indicates this is a "pending" place that hasn't been saved yet
+   */
+  const updateNewMarker = (lng: number, lat: number) => {
+    if (!mapRef.current) return;
+    
+    // Remove any existing preview marker
+    if (newMarkerRef.current) {
+      newMarkerRef.current.remove();
+    }
+    
+    // Create green pin to show where new place will be added
+    const markerEl = createPinMarker('#10b981'); // Green = "new"
+    
+    // Add marker with proper bottom anchor (pin points to exact location)
+    newMarkerRef.current = new mapboxgl.Marker({ 
+      element: markerEl,
+      anchor: 'bottom' // Pin tip points to the exact coordinates
+    })
+      .setLngLat([lng, lat])
+      .addTo(mapRef.current);
+  };
 
-This architecture creates a robust, scalable foundation for your places map application while leveraging Whop's powerful creator economy features.
+  /**
+   * Handles place deletion with confirmation
+   * Only admins can delete places
+   */
+  const handleDeletePlace = async (placeId: string) => {
+    if (!confirm("Are you sure you want to delete this place?")) return;
+
+    try {
+      const response = await fetch(
+        `/api/experiences/${experienceId}/places/${placeId}`,
+        { method: "DELETE" }
+      );
+
+      if (!response.ok) {
+        throw new Error("Failed to delete place");
+      }
+
+      // Refresh page to show updated places list
+      // In production, you might want to use more sophisticated state management
+      window.location.reload();
+    } catch (error) {
+      console.error("Error deleting place:", error);
+    }
+  };
+
+  /**
+   * Callback when map is fully loaded and ready
+   */
+  const handleMapReady = (map: mapboxgl.Map) => {
+    mapRef.current = map;
+  };
+
+  // Handle case where user doesn't have access
+  if (accessLevel === "no_access") {
+    return (
+      <div className="flex items-center justify-center h-64 text-gray-400 bg-[rgb(12,12,35)]">
+        You don't have access to view this map.
+      </div>
+    );
+  }
+
+  const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+  
+  // Fallback to places list if no Mapbox token (graceful degradation)
+  if (!mapboxToken) {
+    return (
+      <PlacesList 
+        places={places}
+        accessLevel={accessLevel}
+        onDeletePlace={handleDeletePlace}
+      />
+    );
+  }
+
+  return (
+    <div className="w-full h-full relative overflow-hidden">
+      {/* Main 3D map container */}
+      <MapContainer
+        places={places}
+        accessLevel={accessLevel}
+        experienceId={experienceId}
+        isAddingPlace={isAddingPlace}
+        newPlacePosition={newPlacePosition}
+        setNewPlacePosition={setNewPlacePosition}
+        updateNewMarker={updateNewMarker}
+        onDeletePlace={handleDeletePlace}
+        onMapReady={handleMapReady}
+      />
+      
+      {/* Admin control panel - only show for admin users */}
+      {accessLevel === "admin" && (
+        <PlaceControlPanel
+          experienceId={experienceId}
+          isAddingPlace={isAddingPlace}
+          setIsAddingPlace={setIsAddingPlace}
+          newPlacePosition={newPlacePosition}
+          setNewPlacePosition={setNewPlacePosition}
+          updateNewMarker={updateNewMarker}
+          map={mapRef.current}
+        />
+      )}
+    </div>
+  );
+}
+```
+
+**Key Design Decisions:**
+
+1. **Conditional Rendering**: Different UI for admin vs customer users
+2. **Graceful Degradation**: Falls back to list view if Mapbox token missing
+3. **State Management**: Local state for place creation workflow
+4. **Ref Management**: Direct DOM manipulation for optimal map performance
+
+## 13. 3D Map Container
+
+Create `components/map/MapContainer.tsx`:
+
+```typescript components/map/MapContainer.tsx
+"use client";
+
+import { useEffect, useRef } from 'react';
+import mapboxgl from 'mapbox-gl';
+import 'mapbox-gl/dist/mapbox-gl.css';
+import type { Place, NewPlacePosition } from './types';
+import { mapStyles } from './styles';
+
+interface MapContainerProps {
+  places: Place[];
+  accessLevel: "admin" | "customer" | "no_access";
+  experienceId: string;
+  isAddingPlace: boolean;
+  newPlacePosition: NewPlacePosition | null;
+  setNewPlacePosition: (position: NewPlacePosition | null) => void;
+  updateNewMarker: (lng: number, lat: number) => void;
+  onDeletePlace: (placeId: string) => Promise<void>;
+  onMapReady: (map: mapboxgl.Map) => void;
+}
+
+/**
+ * Creates a custom SVG pin marker
+ * This is the same function as in MapView - consider extracting to utils
+ */
+const createPinMarker = (color = '#dc2626') => {
+  const markerEl = document.createElement('div');
+  markerEl.className = 'custom-marker';
+  markerEl.innerHTML = `
+    <svg width="24" height="30" viewBox="0 0 24 30" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 0C5.372 0 0 5.372 0 12C0 18.628 12 30 12 30S24 18.628 24 12C24 5.372 18.628 0 12 0Z" fill="${color}"/>
+      <circle cx="12" cy="12" r="4" fill="white"/>
+    </svg>
+  `;
+  return markerEl;
+};
+
+export default function MapContainer({
+  places,
+  accessLevel,
+  experienceId,
+  isAddingPlace,
+  newPlacePosition,
+  setNewPlacePosition,
+  updateNewMarker,
+  onDeletePlace,
+  onMapReady
+}: MapContainerProps) {
+  const mapContainer = useRef<HTMLDivElement>(null);
+  const map = useRef<mapboxgl.Map | null>(null);
+  const markersRef = useRef<mapboxgl.Marker[]>([]);
+
+  useEffect(() => {
+    // Prevent double initialization
+    if (!mapContainer.current || map.current) return;
+
+    const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+    if (!mapboxToken) return;
+
+    mapboxgl.accessToken = mapboxToken;
+
+    // Slight delay to ensure DOM is ready
+    setTimeout(() => {
+      try {
+        if (!mapContainer.current) return;
+        
+        // Initialize Mapbox map with 3D globe projection
+        const mapInstance = new mapboxgl.Map({
+          container: mapContainer.current,
+          style: 'mapbox://styles/mapbox/standard', // Clean, modern base style
+          center: [-90, 25], // Center on North America
+          zoom: 2, // Global view
+          projection: 'globe' as any, // 3D globe projection
+          antialias: true, // Smooth edges
+          renderWorldCopies: false, // Don't repeat the world
+          maxZoom: 20,
+          minZoom: 1
+        });
+
+        // Handle window resizing
+        const resizeObserver = new ResizeObserver((entries) => {
+          if (mapInstance) {
+            setTimeout(() => {
+              mapInstance.resize();
+            }, 0);
+          }
+        });
+
+        if (mapContainer.current) {
+          resizeObserver.observe(mapContainer.current);
+        }
+
+        mapInstance.on('load', () => {
+          // Configure 3D atmosphere effect
+          mapInstance.setFog({
+            color: 'rgba(140, 195, 255, 0.5)', // Sky blue atmosphere
+            'high-color': 'rgba(243, 181, 255, 0.4)', // Purple highlights
+            'horizon-blend': 0.03, // Smooth horizon transition
+            'space-color': 'rgb(12, 12, 35)', // Dark space background
+            'star-intensity': 0.6 // Subtle star field
+          });
+
+          // Add markers for each existing place
+          places.forEach(place => {
+            // Create red pin marker for existing places
+            const markerEl = createPinMarker('#dc2626');
+            
+            // Create popup with place information
+            const popup = new mapboxgl.Popup({ offset: 25 })
+              .setHTML(`
+                <div class="place-info">
+                  <h3>${place.name}</h3>
+                  ${place.description ? `<p class="place-description">${place.description}</p>` : ''}
+                  ${place.category ? `<p class="place-category">${place.category}</p>` : ''}
+                  ${place.address ? `<p class="place-location">${place.address}</p>` : ''}
+                  ${accessLevel === "admin" ? `
+                    <button onclick="window.deletePlace('${place.id}')" class="delete-btn">
+                      Delete Place
+                    </button>
+                  ` : ''}
+                </div>
+              `);
+            
+            // Create marker with popup
+            const marker = new mapboxgl.Marker({ 
+              element: markerEl,
+              anchor: 'bottom' // Pin tip points to exact coordinates
+            })
+              .setLngLat([place.longitude, place.latitude])
+              .setPopup(popup) // Attach popup to marker
+              .addTo(mapInstance);
+
+            markersRef.current.push(marker);
+          });
+
+          // Handle map clicks for adding new places (admin only)
+          if (accessLevel === "admin") {
+            mapInstance.on('click', (e) => {
+              if (isAddingPlace) {
+                const { lng, lat } = e.lngLat;
+                setNewPlacePosition({ lng, lat });
+                updateNewMarker(lng, lat);
+              }
+            });
+          }
+
+          // Remove unnecessary map layers for cleaner look
+          ['land-structure-line', 'waterway-label', 'natural-point-label', 
+           'water-point-label', 'water-line-label'].forEach(layer => {
+            if (mapInstance.getLayer(layer)) {
+              mapInstance.removeLayer(layer);
+            }
+          });
+          
+          // Add custom country boundaries
+          mapInstance.addSource('country-boundaries', {
+            type: 'vector',
+            url: 'mapbox://mapbox.country-boundaries-v1'
+          });
+
+          mapInstance.addLayer({
+            id: 'country-boundaries',
+            type: 'line',
+            source: 'country-boundaries',
+            'source-layer': 'country_boundaries',
+            paint: {
+              'line-color': 'rgba(255, 182, 193, 0.3)', // Subtle pink borders
+              'line-width': 0.4,
+              'line-opacity': 0.4
+            }
+          });
+
+          // Configure lighting for 3D effect
+          mapInstance.setLight({
+            intensity: 0.15, // Subtle lighting
+            color: 'rgb(215, 205, 245)', // Soft purple light
+            anchor: 'map' // Light follows map rotation
+          });
+
+          // Ensure map renders properly
+          mapInstance.resize();
+        });
+
+        map.current = mapInstance;
+        onMapReady(mapInstance);
+
+        // Make delete function globally available for popup buttons
+        (window as any).deletePlace = onDeletePlace;
+
+        // Handle window resize events
+        const handleResize = () => {
+          if (map.current) {
+            map.current.resize();
+          }
+        };
+
+        window.addEventListener('resize', handleResize);
+        
+        // Cleanup function
+        return () => {
+          window.removeEventListener('resize', handleResize);
+          resizeObserver.disconnect();
+          markersRef.current.forEach((marker: mapboxgl.Marker) => marker.remove());
+          if (map.current) {
+            map.current.remove();
+          }
+        };
+      } catch (error) {
+        console.error('Error initializing map:', error);
+      }
+    }, 100);
+  }, [places, accessLevel, experienceId, isAddingPlace, setNewPlacePosition, updateNewMarker, onDeletePlace, onMapReady]);
+
+  return (
+    <>
+      {/* Inject map styles */}
+      <style dangerouslySetInnerHTML={{ __html: mapStyles }} />
+      
+      {/* Map container */}
+      <div 
+        ref={mapContainer} 
+        className="w-full h-full"
+        style={{ position: 'relative' }}
+      />
+    </>
+  );
+}
+```
+
+**3D Globe Implementation Decisions:**
+
+1. **Globe Projection**: Creates an impressive 3D sphere effect
+2. **Atmosphere Styling**: Adds realistic space-like environment
+3. **Custom Lighting**: Enhances 3D appearance
+4. **Layer Management**: Removes clutter for cleaner visuals
+5. **Performance**: Uses refs to avoid unnecessary re-renders
+
+## 14. Admin Control Panel
+
+Create `components/map/PlaceControlPanel.tsx`:
+
+```typescript components/map/PlaceControlPanel.tsx
+"use client";
+
+import { useState } from 'react';
+import type { NewPlacePosition } from './types';
+import { geocodeAddress } from './utils';
+import { controlPanelStyles } from './styles';
+
+interface PlaceControlPanelProps {
+  experienceId: string;
+  isAddingPlace: boolean;
+  setIsAddingPlace: (value: boolean) => void;
+  newPlacePosition: NewPlacePosition | null;
+  setNewPlacePosition: (position: NewPlacePosition | null) => void;
+  updateNewMarker: (lng: number, lat: number) => void;
+  map: any;
+}
+
+export default function PlaceControlPanel({
+  experienceId,
+  isAddingPlace,
+  setIsAddingPlace,
+  newPlacePosition,
+  setNewPlacePosition,
+  updateNewMarker,
+  map
+}: PlaceControlPanelProps) {
+  // Form state for new place creation
+  const [newPlaceName, setNewPlaceName] = useState("");
+  const [newPlaceDescription, setNewPlaceDescription] = useState("");
+  const [newPlaceCategory, setNewPlaceCategory] = useState("");
+  const [newPlaceAddress, setNewPlaceAddress] = useState("");
+  const [isGeocoding, setIsGeocoding] = useState(false);
+
+  /**
+   * Converts typed address to GPS coordinates using Mapbox Geocoding API
+   * This allows users to add places by typing addresses instead of just clicking
+   */
+  const handleAddressGeocode = async () => {
+    if (!newPlaceAddress.trim() || !map) return;
+    
+    setIsGeocoding(true);
+    const result = await geocodeAddress(newPlaceAddress);
+    setIsGeocoding(false);
+    
+    if (result) {
+      setNewPlacePosition({ lng: result.lng, lat: result.lat });
+      setNewPlaceAddress(result.fullAddress); // Use the full formatted address
+      
+      // Fly to the geocoded location and show preview marker
+      map.flyTo({ center: [result.lng, result.lat], zoom: 6 });
+      updateNewMarker(result.lng, result.lat);
+    } else {
+      alert('Could not find that address. Please try a different address or click on the map.');
+    }
+  };
+
+  /**
+   * Submits new place to the API
+   * Validates required fields and handles form reset
+   */
+  const handleAddPlace = async () => {
+    if (!newPlacePosition || !newPlaceName.trim()) return;
+
+    const newPlace = {
+      name: newPlaceName,
+      description: newPlaceDescription || null,
+      latitude: newPlacePosition.lat,
+      longitude: newPlacePosition.lng,
+      address: newPlaceAddress || null,
+      category: newPlaceCategory || null,
+    };
+
+    try {
+      const response = await fetch(`/api/experiences/${experienceId}/places`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(newPlace),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to add place");
+      }
+
+      // Reset form and refresh page to show new place
+      resetForm();
+      window.location.reload();
+    } catch (error) {
+      console.error("Error adding place:", error);
+    }
+  };
+
+  /**
+   * Resets all form fields and exit add mode
+   */
+  const resetForm = () => {
+    setNewPlaceName("");
+    setNewPlaceDescription("");
+    setNewPlaceCategory("");
+    setNewPlaceAddress("");
+    setNewPlacePosition(null);
+    setIsAddingPlace(false);
+  };
+
+  return (
+    <>
+      {/* Inject control panel styles */}
+      <style dangerouslySetInnerHTML={{ __html: controlPanelStyles }} />
+      
+      <div className="places-controls">
+        {/* Toggle add place mode */}
+        <button 
+          className={`control-button ${isAddingPlace ? 'active' : ''}`}
+          onClick={() => setIsAddingPlace(!isAddingPlace)}
+        >
+          {isAddingPlace ? '✕ Cancel' : '+ Add Place'}
+        </button>
+
+        {isAddingPlace && (
+          <>
+            {/* Place name input - required field */}
+            <input
+              type="text"
+              placeholder="Place name *"
+              value={newPlaceName}
+              onChange={(e) => setNewPlaceName(e.target.value)}
+              className="control-input"
+            />
+            
+            {/* Description input - optional */}
+            <input
+              type="text"
+              placeholder="Description"
+              value={newPlaceDescription}
+              onChange={(e) => setNewPlaceDescription(e.target.value)}
+              className="control-input"
+            />
+            
+            {/* Category input - optional, for grouping places */}
+            <input
+              type="text"
+              placeholder="Category"
+              value={newPlaceCategory}
+              onChange={(e) => setNewPlaceCategory(e.target.value)}
+              className="control-input"
+            />
+            
+            {/* Address input with geocoding */}
+            <input
+              type="text"
+              placeholder="Address"
+              value={newPlaceAddress}
+              onChange={(e) => setNewPlaceAddress(e.target.value)}
+              className="control-input"
+            />
+            
+            {/* Geocode address button */}
+            <button
+              onClick={handleAddressGeocode}
+              disabled={!newPlaceAddress.trim() || isGeocoding}
+              className="control-button"
+              style={{ fontSize: '11px', marginBottom: '8px' }}
+            >
+              {isGeocoding ? 'Searching...' : 'Find Address'}
+            </button>
+            
+            {/* Show coordinates when position is selected */}
+            {newPlacePosition && (
+              <div className="control-status">
+                ✓ Position: {newPlacePosition.lat.toFixed(4)}, {newPlacePosition.lng.toFixed(4)}
+              </div>
+            )}
+
+            {/* Action buttons - only show when position is set */}
+            {newPlacePosition && (
+              <div className="control-actions">
+                <button 
+                  onClick={handleAddPlace} 
+                  disabled={!newPlaceName.trim()}
+                  className="control-button"
+                  style={{ 
+                    background: '#10b981 !important', 
+                    color: 'white !important', 
+                    flex: '2', 
+                    marginBottom: 0,
+                    fontWeight: '600',
+                    fontSize: '13px'
+                  }}
+                >
+                  ✓ Add
+                </button>
+                <button
+                  onClick={resetForm}
+                  className="control-button"
+                  style={{ 
+                    background: '#dc2626 !important', 
+                    color: 'white !important', 
+                    flex: '1', 
+                    padding: '8px', 
+                    marginBottom: 0,
+                    fontSize: '12px'
+                  }}
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+```
+
+**Control Panel Design Decisions:**
+
+1. **Progressive Disclosure**: Fields appear as needed in the workflow
+2. **Dual Input Methods**: Users can click map OR type addresses
+3. **Visual Feedback**: Clear status indicators for each step
+4. **Form Validation**: Prevents submission without required fields
+5. **Error Handling**: Graceful fallbacks for geocoding failures
+
+## 15. Fallback Places List
+
+Create `components/map/PlacesList.tsx`:
+
+```typescript components/map/PlacesList.tsx
+"use client";
+
+import type { Place } from './types';
+
+interface PlacesListProps {
+  places: Place[];
+  accessLevel: "admin" | "customer" | "no_access";
+  onDeletePlace: (placeId: string) => Promise<void>;
+}
+
+/**
+ * Fallback component when Mapbox is unavailable
+ * Provides basic place management without the map visualization
+ */
+export default function PlacesList({
+  places,
+  accessLevel,
+  onDeletePlace
+}: PlacesListProps) {
+  return (
+    <div className="max-w-4xl mx-auto p-6">
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold text-gray-900 mb-2">
+          Places {accessLevel === "admin" ? "Management" : ""}
+        </h1>
+        <p className="text-gray-600">
+          {places.length} place{places.length !== 1 ? 's' : ''} available
+        </p>
+      </div>
+
+      {places.length === 0 ? (
+        <div className="text-center py-12">
+          <div className="text-gray-400 text-lg mb-2">No places added yet</div>
+          {accessLevel === "admin" && (
+            <p className="text-gray-500 text-sm">
+              Add places to get started with your interactive map
+            </p>
+          )}
+        </div>
+      ) : (
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          {places.map((place) => (
+            <div
+              key={place.id}
+              className="bg-white rounded-lg border border-gray-200 p-4 shadow-sm hover:shadow-md transition-shadow"
+            >
+              <div className="flex justify-between items-start mb-2">
+                <h3 className="font-semibold text-gray-900 text-lg">
+                  {place.name}
+                </h3>
+                {accessLevel === "admin" && (
+                  <button
+                    onClick={() => onDeletePlace(place.id)}
+                    className="text-red-600 hover:text-red-800 text-sm ml-2"
+                  >
+                    Delete
+                  </button>
+                )}
+              </div>
+              
+              {place.description && (
+                <p className="text-gray-600 text-sm mb-2">
+                  {place.description}
+                </p>
+              )}
+              
+              {place.category && (
+                <span className="inline-block bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full mb-2">
+                  {place.category}
+                </span>
+              )}
+              
+              {place.address && (
+                <p className="text-gray-500 text-xs mb-2">
+                  📍 {place.address}
+                </p>
+              )}
+              
+              <div className="text-xs text-gray-400">
+                {place.latitude.toFixed(4)}, {place.longitude.toFixed(4)}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+## 16. Production Deployment
+
+### Environment Variables for Production
+
+Update your production environment with:
+
+```env
+# Production Environment Variables
+WHOP_APP_ID=app_your_production_app_id
+WHOP_API_KEY=whop_your_production_api_key
+MY_USER_ID=your_whop_user_id
+DATABASE_URL=postgresql://your_production_db_url
+DIRECT_URL=postgresql://your_production_direct_url
+NEXT_PUBLIC_MAPBOX_TOKEN=pk.your_mapbox_token
+
+# Optional
+DEFAULT_WEBHOOK_URL=https://your-webhook-endpoint.com
+```
+
+### Deployment Steps
+
+1. **Push to GitHub**:
+   ```bash
+   git add .
+   git commit -m "Complete places map implementation"
+   git push origin main
+   ```
+
+2. **Deploy to Vercel**:
+   - Connect your GitHub repository
+   - Add all environment variables
+   - Deploy
+
+3. **Update Whop App Settings**:
+   - Change redirect URL to your production domain
+   - Update any webhook URLs
+   - Switch from localhost to production mode
+
+### Performance Optimizations
+
+1. **Database Indexing**:
+   ```sql
+   CREATE INDEX idx_places_experience_id ON places(experienceId);
+   CREATE INDEX idx_places_coordinates ON places(latitude, longitude);
+   ```
+
+2. **Mapbox Optimization**:
+   - Use vector tiles for better performance
+   - Implement marker clustering for many places
+   - Add map bounds restrictions if needed
+
+3. **Caching Strategy**:
+   - Cache place data with Redis or similar
+   - Implement incremental static regeneration
+   - Use CDN for static assets
+
+## 17. Advanced Features
+
+### Marker Clustering
+
+For experiences with many places, add clustering:
+
+```typescript
+// Add to MapContainer.tsx
+import { ClusterLayer } from 'mapbox-gl-cluster';
+
+// In map load event:
+map.addSource('places-cluster', {
+  type: 'geojson',
+  data: {
+    type: 'FeatureCollection',
+    features: places.map(place => ({
+      type: 'Feature',
+      geometry: {
+        type: 'Point',
+        coordinates: [place.longitude, place.latitude]
+      },
+      properties: place
+    }))
+  },
+  cluster: true,
+  clusterMaxZoom: 14,
+  clusterRadius: 50
+});
+```
+
+### Search and Filtering
+
+Add search functionality:
+
+```typescript
+// Add to PlaceControlPanel.tsx
+const [searchQuery, setSearchQuery] = useState("");
+const [categoryFilter, setCategoryFilter] = useState("");
+
+const filteredPlaces = places.filter(place => 
+  place.name.toLowerCase().includes(searchQuery.toLowerCase()) &&
+  (!categoryFilter || place.category === categoryFilter)
+);
+```
+
+### Real-time Updates
+
+Implement real-time place updates:
+
+```typescript
+// Using WebSockets or Server-Sent Events
+useEffect(() => {
+  const eventSource = new EventSource(`/api/experiences/${experienceId}/places/stream`);
+  
+  eventSource.onmessage = (event) => {
+    const update = JSON.parse(event.data);
+    // Update places list without page reload
+  };
+  
+  return () => eventSource.close();
+}, [experienceId]);
+```
+
+## Summary
+
+You've built a comprehensive places management application that demonstrates:
+
+### Technical Achievements
+- **3D Globe Visualization**: Beautiful Mapbox integration with custom markers
+- **Role-Based Access Control**: Secure admin/customer permissions via Whop API
+- **Real-time Database**: PostgreSQL with Prisma for reliable data management
+- **Geocoding Integration**: Address-to-coordinates conversion
+- **Responsive Design**: Works across all devices and screen sizes
+
+### Business Value
+- **Creator Monetization**: Sell access to curated place collections
+- **Customer Engagement**: Interactive exploration experiences
+- **Scalable Architecture**: Easy to extend with new features
+- **Professional Polish**: Production-ready with proper error handling
+
+### Next Steps
+1. **Add Analytics**: Track user engagement and popular places
+2. **Implement Categories**: Better organization and filtering
+3. **Add Media Upload**: Photos and videos for places
+4. **Social Features**: Comments, ratings, and sharing
+5. **Mobile App**: React Native version using same backend
+
+Your places map application is now ready to launch and start generating revenue for creators on the Whop platform!
+
+## Need Help?
+- Join the [Developer Whop](https://whop.com/whop-devs)
+- View the template [here](https://github.com/whopio/whop-nextjs-app-template)
+- Visit our [SDK GitHub repository](https://github.com/whopio/whop-sdk-ts)
+- DM @0ni_x4 on Discord
